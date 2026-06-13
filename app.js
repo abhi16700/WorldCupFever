@@ -113,6 +113,17 @@ let apiTeamNameByCode = {};
 let apiTeamCodeById = {};
 let apiTeamMetaByCode = {};
 
+const localTeamMeta = {
+  BRA: { name: "Brazil", flag: "https://flagcdn.com/w40/br.png" },
+  FRA: { name: "France", flag: "https://flagcdn.com/w40/fr.png" },
+  ARG: { name: "Argentina", flag: "https://flagcdn.com/w40/ar.png" },
+  ENG: { name: "England", flag: "https://flagcdn.com/w40/gb-eng.png" },
+  ESP: { name: "Spain", flag: "https://flagcdn.com/w40/es.png" },
+  GER: { name: "Germany", flag: "https://flagcdn.com/w40/de.png" },
+  POR: { name: "Portugal", flag: "https://flagcdn.com/w40/pt.png" },
+  USA: { name: "USA", flag: "https://flagcdn.com/w40/us.png" },
+};
+
 const weights = {
   gdp: 0.2,
   population: 0.15,
@@ -128,7 +139,7 @@ const elements = {
   liveSourceStatus: document.getElementById("liveSourceStatus"),
   refreshButton: document.getElementById("refreshButton"),
   todayFixturesCount: document.getElementById("todayFixturesCount"),
-  topGoalTeam: document.getElementById("topGoalTeam"),
+  topGoalTeamList: document.getElementById("topGoalTeamList"),
   matchSelect: document.getElementById("matchSelect"),
   scoreA: document.getElementById("scoreA"),
   scoreB: document.getElementById("scoreB"),
@@ -138,6 +149,28 @@ const elements = {
 
 function getTeamById(id) {
   return teams.find((team) => team.id === id);
+}
+
+function resolveTeamCode(value) {
+  const rawValue = String(value || "").trim();
+  if (!rawValue) return "";
+
+  const upperValue = rawValue.toUpperCase();
+  const lowerValue = rawValue.toLowerCase();
+
+  if (localTeamMeta[upperValue]) return upperValue;
+  if (apiTeamCodeById[rawValue]) return apiTeamCodeById[rawValue];
+  if (apiTeamCodeById[upperValue]) return apiTeamCodeById[upperValue];
+  if (apiTeamCodeById[lowerValue]) return apiTeamCodeById[lowerValue];
+  if (apiTeamMetaByCode[rawValue]) return apiTeamMetaByCode[rawValue].code || rawValue;
+  if (apiTeamMetaByCode[upperValue]) return apiTeamMetaByCode[upperValue].code || upperValue;
+  if (apiTeamMetaByCode[lowerValue]) return apiTeamMetaByCode[lowerValue].code || rawValue;
+  if (apiTeamCodeByName[lowerValue]) return apiTeamCodeByName[lowerValue];
+
+  const knownLocal = Object.values(localTeamMeta).find((meta) => meta.name.toLowerCase() === lowerValue);
+  if (knownLocal) return knownLocal.code;
+
+  return rawValue;
 }
 
 async function fetchJson(url) {
@@ -150,22 +183,31 @@ async function fetchJson(url) {
 
 function formatApiDate(rawDate) {
   if (!rawDate) return "";
-  const [datePart, timePart] = rawDate.split(" ");
-  const [day, month, year] = (datePart || "").split("/");
-  const [hour, minute] = (timePart || "").split(":");
-  if (!day || !month || !year || !hour || !minute) return rawDate;
-
-  const date = new Date(`${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}T${hour.padStart(2, "0")}:${minute.padStart(2, "0")}:00`);
+  const date = parseApiDate(rawDate);
+  if (!date) return "Date TBD";
   return `${date.toLocaleDateString(undefined, { month: "short", day: "numeric" })} · ${date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}`;
 }
 
 function parseApiDate(rawDate) {
   if (!rawDate) return null;
-  const [datePart, timePart] = rawDate.split(" ");
-  const [day, month, year] = (datePart || "").split("/");
-  const [hour, minute] = (timePart || "").split(":");
-  if (!day || !month || !year || !hour || !minute) return null;
-  return new Date(`${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}T${hour.padStart(2, "0")}:${minute.padStart(2, "0")}:00`);
+  const normalized = String(rawDate).trim();
+
+  const dmYMatch = normalized.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})[ T](\d{1,2}):(\d{2})$/);
+  if (dmYMatch) {
+    const [, day, month, year, hour, minute] = dmYMatch;
+    const date = new Date(`${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}T${hour.padStart(2, "0")}:${minute}:00`);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  const ymdMatch = normalized.match(/^(\d{4})-(\d{1,2})-(\d{1,2})[ T](\d{1,2}):(\d{2})$/);
+  if (ymdMatch) {
+    const [, year, month, day, hour, minute] = ymdMatch;
+    const date = new Date(`${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}T${hour.padStart(2, "0")}:${minute}:00`);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  const looseDate = new Date(normalized);
+  return Number.isNaN(looseDate.getTime()) ? null : looseDate;
 }
 
 function isToday(rawDate) {
@@ -195,7 +237,32 @@ function countTodayFixtures(matches) {
   return matches.filter((match) => isToday(match.rawDate)).length;
 }
 
-function getTopGoalTeam(matches) {
+function getStatusLabel(status) {
+  const normalized = String(status || "").toLowerCase();
+  if (normalized === "finished" || normalized === "ft") return "Finished";
+  if (normalized === "ongoing" || normalized.includes("live") || normalized.includes("halftime")) return "Ongoing";
+  return "Upcoming";
+}
+
+function getMatchDateLabel(match) {
+  if (match.dateLabel) {
+    const label = String(match.dateLabel).trim();
+    if (label && !label.toLowerCase().includes("invalid date")) return label;
+  }
+  if (match.rawDate) {
+    const formatted = formatApiDate(match.rawDate);
+    if (formatted && !formatted.toLowerCase().includes("invalid date")) return formatted;
+  }
+  return "Date TBD";
+}
+
+function getMatchSummary(match, teamAName, teamBName, statusLabel) {
+  if (match.summary) return match.summary;
+  if (match.description) return match.description;
+  return buildMatchSummary(match, teamAName, teamBName, Number(match.scoreA || 0), Number(match.scoreB || 0), statusLabel);
+}
+
+function getTopGoalTeams(matches, limit = 3) {
   const goals = {};
   matches.forEach((match) => {
     const teamA = match.teamA;
@@ -206,22 +273,68 @@ function getTopGoalTeam(matches) {
     goals[teamB] += Number(match.scoreB || 0);
   });
 
-  const sorted = Object.entries(goals).sort(([, a], [, b]) => b - a);
-  if (!sorted.length) return { code: null, label: "N/A" };
-  const [topTeam, topGoals] = sorted[0];
-  const teamMeta = getTeamMetaByCode(topTeam);
-  return { code: topTeam, label: `${teamMeta.name || topTeam} (${topGoals} goals)` };
+  const sorted = Object.entries(goals)
+    .map(([team, goalsScored]) => ({ team, goals: goalsScored }))
+    .sort((a, b) => b.goals - a.goals)
+    .slice(0, limit);
+
+  return sorted.map(({ team, goals }) => {
+    const teamMeta = getTeamMetaByCode(team);
+    return {
+      code: team,
+      name: teamMeta.name || team,
+      flag: teamMeta.flag || "",
+      goals,
+    };
+  });
+}
+
+function renderTopGoalTeams(teams) {
+  if (!teams.length) {
+    return `<p class="stat-value">N/A</p>`;
+  }
+  return `<div class="top-goal-grid">${teams
+    .map(
+      (team, index) => `
+      <div class="top-goal-item">
+        <span class="top-goal-rank">#${index + 1}</span>
+        <div class="top-goal-team">
+          ${team.flag ? `<img src="${team.flag}" alt="${team.name} flag" loading="lazy" />` : ""}
+          <span>${team.name}</span>
+        </div>
+        <span class="top-goal-score">${team.goals} goals</span>
+      </div>
+    `
+    )
+    .join("")}</div>`;
 }
 
 function updateHeroStats(matches) {
-  const topGoalTeam = getTopGoalTeam(matches);
+  const topGoals = getTopGoalTeams(matches);
   elements.todayFixturesCount.textContent = `${countTodayFixtures(matches)} today`;
-  elements.topGoalTeam.textContent = topGoalTeam.label;
-  return topGoalTeam.code;
+  elements.topGoalTeamList.innerHTML = renderTopGoalTeams(topGoals);
+  return topGoals[0]?.code || null;
 }
 
 function getTeamMetaByCode(code) {
-  return apiTeamMetaByCode[code] || { code, name: code, iso2: "", flag: "" };
+  const normalized = String(code || "").trim();
+  if (!normalized) {
+    return { code: "", name: "Unknown", iso2: "", flag: "" };
+  }
+
+  const exact = apiTeamMetaByCode[normalized] || apiTeamMetaByCode[normalized.toLowerCase()] || apiTeamMetaByCode[normalized.toUpperCase()];
+  if (exact) return exact;
+
+  const upper = normalized.toUpperCase();
+  if (localTeamMeta[upper]) return localTeamMeta[upper];
+
+  const knownLocal = Object.values(localTeamMeta).find((meta) => meta.name.toLowerCase() === normalized.toLowerCase());
+  if (knownLocal) return knownLocal;
+
+  const knownApi = Object.values(apiTeamMetaByCode).find((meta) => meta.name && meta.name.toLowerCase() === normalized.toLowerCase());
+  if (knownApi) return knownApi;
+
+  return { code: normalized, name: normalized, iso2: "", flag: "" };
 }
 
 function loadLiveTeamMap() {
@@ -238,18 +351,26 @@ function loadLiveTeamMap() {
         const name = String(team.name_en || team.name || "").trim();
         const code = String(team.fifa_code || team.code || team.iso2 || "").trim();
         const iso2 = String(team.iso2 || "").trim();
-        const flag = iso2 ? `https://flagcdn.com/w40/${iso2.toLowerCase()}.png` : "";
+        const flag = String(team.flag || "").trim() || (iso2 ? `https://flagcdn.com/w40/${iso2.toLowerCase()}.png` : "");
         const meta = { id, name, code: code || name, iso2, flag };
 
               if (id) {
           apiTeamCodeById[id] = code || name;
+          apiTeamMetaByCode[id] = meta;
+          apiTeamMetaByCode[id.toString().toLowerCase()] = meta;
+          apiTeamMetaByCode[id.toString().toUpperCase()] = meta;
         }
         if (name) {
           apiTeamCodeByName[name.toLowerCase()] = code || name;
+          apiTeamMetaByCode[name.toLowerCase()] = meta;
+          apiTeamMetaByCode[name] = meta;
+          apiTeamMetaByCode[name.toUpperCase()] = meta;
         }
         if (code) {
           apiTeamNameByCode[code] = name;
           apiTeamMetaByCode[code] = meta;
+          apiTeamMetaByCode[code.toLowerCase()] = meta;
+          apiTeamMetaByCode[code.toUpperCase()] = meta;
         }
         if (name && !apiTeamMetaByCode[name]) {
           apiTeamMetaByCode[name] = meta;
@@ -281,8 +402,8 @@ function normalizeApiMatch(rawMatch) {
 
   return {
     id: `API-${rawMatch.id || rawMatch._id}`,
-    teamA,
-    teamB,
+    teamA: resolveTeamCode(teamA),
+    teamB: resolveTeamCode(teamB),
     teamAName: homeName,
     teamBName: awayName,
     scoreA: Number(rawMatch.home_score ?? rawMatch.homeScore ?? rawMatch.home ?? 0),
@@ -415,7 +536,7 @@ function getPredictionData() {
 
 function renderLeaderboard() {
   const prediction = getPredictionData();
-  const topGoalTeamCode = getTopGoalTeam(getActiveMatches()).code;
+  const topGoalTeamCode = getTopGoalTeams(getActiveMatches())[0]?.code;
   elements.leaderboard.innerHTML = prediction
     .map((team, index) => {
       const teamMeta = getTeamMetaByCode(team.id);
@@ -444,44 +565,88 @@ function renderLeaderboard() {
     .join("\n");
 }
 
+function renderMatchCard(match) {
+  const teamA = getTeamById(match.teamA);
+  const teamB = getTeamById(match.teamB);
+  const teamAName = teamA ? teamA.name : match.teamAName || match.teamA;
+  const teamBName = teamB ? teamB.name : match.teamBName || match.teamB;
+  const teamAMeta = getTeamMetaByCode(match.teamA);
+  const teamBMeta = getTeamMetaByCode(match.teamB);
+  const statusLabel = match.statusLabel || getStatusLabel(match.status);
+  const statusClass = statusLabel === "Ongoing" ? "status-ongoing" : statusLabel === "Finished" ? "status-finished" : "status-upcoming";
+  const dateLabel = getMatchDateLabel(match);
+  const summary = getMatchSummary(match, teamAName, teamBName, statusLabel);
+
+  return `
+    <div class="match-card">
+      <div class="match-header">
+        <div class="match-teams">
+          <div class="team-pill">
+            ${teamAMeta.flag ? `<img src="${teamAMeta.flag}" alt="${teamAName} flag" loading="lazy" />` : ""}
+            <span>${teamAName}</span>
+          </div>
+          <div class="match-score">${match.scoreA ?? 0} — ${match.scoreB ?? 0}</div>
+          <div class="team-pill">
+            ${teamBMeta.flag ? `<img src="${teamBMeta.flag}" alt="${teamBName} flag" loading="lazy" />` : ""}
+            <span>${teamBName}</span>
+          </div>
+        </div>
+        <span class="status-badge ${statusClass}">${statusLabel}</span>
+      </div>
+      <p class="match-meta">${dateLabel} · ${statusLabel}</p>
+      <p class="match-summary">${summary}</p>
+    </div>
+  `;
+}
+
+function renderMatchGroup(title, matches, emptyText, id, collapsed = false) {
+  return `
+    <div class="match-group${collapsed ? " collapsed" : ""}" data-group="${id}">
+      <div class="match-group-header">
+        <div>
+          <h3>${title}</h3>
+          <span>${matches.length} ${matches.length === 1 ? "match" : "matches"}</span>
+        </div>
+        <button type="button" class="group-toggle" data-group="${id}">${collapsed ? "Expand" : "Collapse"}</button>
+      </div>
+      <div class="match-group-list">
+        ${matches.length ? matches.map(renderMatchCard).join("\n") : `<p class="empty-group">${emptyText}</p>`}
+      </div>
+    </div>
+  `;
+}
+
+function attachGroupToggles() {
+  document.querySelectorAll(".group-toggle").forEach((button) => {
+    button.addEventListener("click", () => {
+      const groupId = button.getAttribute("data-group");
+      const group = document.querySelector(`.match-group[data-group="${groupId}"]`);
+      if (!group) return;
+      const collapsed = group.classList.toggle("collapsed");
+      button.textContent = collapsed ? "Expand" : "Collapse";
+    });
+  });
+}
+
 function renderMatches() {
   const activeMatches = getActiveMatches();
   const ongoingCount = activeMatches.filter((match) => match.status === "ongoing").length;
   elements.liveMatchCount.textContent = `${ongoingCount} ongoing match${ongoingCount === 1 ? "" : "es"}`;
-  const topGoalTeamCode = updateHeroStats(activeMatches);
+  updateHeroStats(activeMatches);
 
-  elements.matchFeed.innerHTML = activeMatches
-    .map((match) => {
-      const teamA = getTeamById(match.teamA);
-      const teamB = getTeamById(match.teamB);
-      const teamAName = teamA ? teamA.name : match.teamAName || match.teamA;
-      const teamBName = teamB ? teamB.name : match.teamBName || match.teamB;
-      const teamAMeta = getTeamMetaByCode(match.teamA);
-      const teamBMeta = getTeamMetaByCode(match.teamB);
-      const statusClass = match.status === "ongoing" ? "status-ongoing" : match.status === "finished" ? "status-finished" : "status-upcoming";
+  const liveMatches = activeMatches.filter((match) => match.status === "ongoing");
+  const todayMatches = activeMatches.filter((match) => match.status === "upcoming" && isToday(match.rawDate));
+  const upcomingMatches = activeMatches.filter((match) => match.status === "upcoming" && !isToday(match.rawDate));
+  const recentMatches = activeMatches.filter((match) => match.status === "finished");
 
-      return `
-      <div class="match-card">
-        <div class="match-header">
-          <div class="match-teams">
-            <div class="team-pill">
-              ${teamAMeta.flag ? `<img src="${teamAMeta.flag}" alt="${teamAName} flag" loading="lazy" />` : ""}
-              <span>${teamAName}</span>
-            </div>
-            <div class="match-score">${match.scoreA} — ${match.scoreB}</div>
-            <div class="team-pill">
-              ${teamBMeta.flag ? `<img src="${teamBMeta.flag}" alt="${teamBName} flag" loading="lazy" />` : ""}
-              <span>${teamBName}</span>
-            </div>
-          </div>
-          <span class="status-badge ${statusClass}">${match.statusLabel}</span>
-        </div>
-        <p class="match-meta">${match.description} · ${match.dateLabel}</p>
-        <p class="match-summary">${match.summary}</p>
-      </div>
-    `;
-    })
-    .join("\n");
+  elements.matchFeed.innerHTML = [
+    renderMatchGroup("Live matches", liveMatches, "No live matches right now.", "live"),
+    renderMatchGroup("Today’s fixtures", todayMatches, "No fixtures scheduled for today.", "today"),
+    renderMatchGroup("Upcoming fixtures", upcomingMatches, "No more upcoming games.", "upcoming", true),
+    renderMatchGroup("Recent results", recentMatches, "No completed matches yet.", "recent"),
+  ].join("\n");
+
+  attachGroupToggles();
 }
 
 function populateMatchSelect() {
