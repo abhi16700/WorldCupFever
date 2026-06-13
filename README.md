@@ -34,9 +34,9 @@ Klement’s model in this version uses:
 
 ## Live FIFA 2026 integration
 
-This version fetches live match data from `https://worldcupjson.net` and updates the app in real time when matches are available.
+This version fetches live match data from `https://worldcup26.ir/get/games` and updates the app in real time when matches are available.
 
-- Uses `/matches/current` and `/matches/today` to display live FIFA 2026 scoreboard data
+- Uses `https://worldcup26.ir/get/games` to display live FIFA 2026 scoreboard data
 - Refresh the feed with the **Refresh now** button
 - Falls back to built-in simulated score data when no live match feed is available
 
