@@ -195,18 +195,18 @@ function parseApiDate(rawDate) {
   const dmYMatch = normalized.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})[ T](\d{1,2}):(\d{2})$/);
   if (dmYMatch) {
     const [, day, month, year, hour, minute] = dmYMatch;
-    const date = new Date(`${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}T${hour.padStart(2, "0")}:${minute}:00`);
+    const date = new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute));
     return Number.isNaN(date.getTime()) ? null : date;
   }
 
-  const ymdMatch = normalized.match(/^(\d{4})-(\d{1,2})-(\d{1,2})[ T](\d{1,2}):(\d{2})$/);
+  const ymdMatch = normalized.match(/^(\d{4})-(\d{1,2})-(\d{1,2})[ T](\d{1,2}):(\d{2})(?:Z)?$/);
   if (ymdMatch) {
     const [, year, month, day, hour, minute] = ymdMatch;
-    const date = new Date(`${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}T${hour.padStart(2, "0")}:${minute}:00`);
+    const date = new Date(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute));
     return Number.isNaN(date.getTime()) ? null : date;
   }
 
-  const looseDate = new Date(normalized);
+  const looseDate = new Date(normalized.replace(/\s+/g, "T"));
   return Number.isNaN(looseDate.getTime()) ? null : looseDate;
 }
 
@@ -389,10 +389,11 @@ function normalizeApiMatch(rawMatch) {
   const teamB = apiTeamCodeById[rawMatch.away_team_id] || apiTeamCodeByName[awayName.toLowerCase()] || rawMatch.away_team_id || awayName;
   const rawStatus = String(rawMatch.time_elapsed || rawMatch.finished || rawMatch.status || "").toLowerCase();
   const finishedFlag = String(rawMatch.finished || "").toLowerCase();
+  const numericElapsed = /^\d{1,3}(?:\+\d{1,3})?$/.test(rawStatus);
   const mappedStatus =
     finishedFlag === "true" || rawStatus.includes("finished") || rawStatus === "ft"
       ? "finished"
-      : rawStatus.includes("live") || rawStatus.includes("halftime") || rawStatus.includes("1st") || rawStatus.includes("2nd") || rawStatus.includes("in progress")
+      : numericElapsed || rawStatus.includes("live") || rawStatus.includes("halftime") || rawStatus.includes("1st") || rawStatus.includes("2nd") || rawStatus.includes("in progress")
       ? "ongoing"
       : "upcoming";
 
@@ -400,6 +401,7 @@ function normalizeApiMatch(rawMatch) {
   if (rawMatch.group) descriptionParts.push(`Group ${rawMatch.group}`);
   if (rawMatch.matchday) descriptionParts.push(`Matchday ${rawMatch.matchday}`);
 
+  const rawDate = rawMatch.local_date || rawMatch.date || rawMatch.localDate || rawMatch.utc_date || rawMatch.utcDate;
   return {
     id: `API-${rawMatch.id || rawMatch._id}`,
     teamA: resolveTeamCode(teamA),
@@ -412,8 +414,8 @@ function normalizeApiMatch(rawMatch) {
     statusLabel: mappedStatus === "finished" ? "Finished" : mappedStatus === "ongoing" ? "Ongoing" : "Upcoming",
     description: descriptionParts.join(" • ") || rawMatch.type || "FIFA match",
     summary: buildMatchSummary(rawMatch, homeName, awayName, Number(rawMatch.home_score ?? rawMatch.homeScore ?? rawMatch.home ?? 0), Number(rawMatch.away_score ?? rawMatch.awayScore ?? rawMatch.away ?? 0), mappedStatus === "finished" ? "Finished" : mappedStatus === "ongoing" ? "Ongoing" : "Upcoming"),
-    dateLabel: formatApiDate(rawMatch.local_date || rawMatch.date || rawMatch.localDate),
-    rawDate: rawMatch.local_date || rawMatch.date || rawMatch.localDate,
+    dateLabel: formatApiDate(rawDate),
+    rawDate,
     rawStatus: rawMatch.time_elapsed,
   };
 }
@@ -657,7 +659,7 @@ function populateMatchSelect() {
       const teamB = getTeamById(match.teamB);
       const teamAName = teamA ? teamA.name : match.teamAName || match.teamA;
       const teamBName = teamB ? teamB.name : match.teamBName || match.teamB;
-      return `<option value="${index}">${teamAName} vs ${teamBName} — ${match.dateLabel}</option>`;
+      return `<option value="${index}">${teamAName} vs ${teamBName} — ${getMatchDateLabel(match)}</option>`;
     })
     .join("");
 
