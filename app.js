@@ -107,7 +107,11 @@ const matches = [
 const LIVE_API_BASE = "https://worldcup26.ir";
 const LIVE_API_GAMES_PATH = "/get/games";
 const LIVE_API_TEAMS_PATH = "/get/teams";
+const KAGGLE_MATCHES_PATH = "matches.csv";
+const KAGGLE_TEAMS_PATH = "teams.csv";
 let externalMatches = [];
+let kaggleMatches = [];
+let isKaggleDatasetLoaded = false;
 let apiTeamCodeByName = {};
 let apiTeamNameByCode = {};
 let apiTeamCodeById = {};
@@ -132,14 +136,42 @@ const weights = {
   performance: 0.2,
 };
 
+const worldCupWinners = [
+  { year: 1930, champion: "Uruguay", runnerUp: "Argentina", score: "4–2", host: "Uruguay", flagA: "uy", flagB: "ar" },
+  { year: 1934, champion: "Italy", runnerUp: "Czechoslovakia", score: "2–1", host: "Italy", flagA: "it", flagB: "cz" },
+  { year: 1938, champion: "Italy", runnerUp: "Hungary", score: "4–2", host: "France", flagA: "it", flagB: "hu" },
+  { year: 1950, champion: "Uruguay", runnerUp: "Brazil", score: "2–1", host: "Brazil", flagA: "uy", flagB: "br" },
+  { year: 1954, champion: "West Germany", runnerUp: "Hungary", score: "3–2", host: "Switzerland", flagA: "de", flagB: "hu" },
+  { year: 1958, champion: "Brazil", runnerUp: "Sweden", score: "5–2", host: "Sweden", flagA: "br", flagB: "se" },
+  { year: 1962, champion: "Brazil", runnerUp: "Czechoslovakia", score: "3–1", host: "Chile", flagA: "br", flagB: "cz" },
+  { year: 1966, champion: "England", runnerUp: "West Germany", score: "4–2", host: "England", flagA: "gb-eng", flagB: "de" },
+  { year: 1970, champion: "Brazil", runnerUp: "Italy", score: "4–1", host: "Mexico", flagA: "br", flagB: "it" },
+  { year: 1974, champion: "West Germany", runnerUp: "Netherlands", score: "2–1", host: "West Germany", flagA: "de", flagB: "nl" },
+  { year: 1978, champion: "Argentina", runnerUp: "Netherlands", score: "3–1", host: "Argentina", flagA: "ar", flagB: "nl" },
+  { year: 1982, champion: "Italy", runnerUp: "West Germany", score: "3–1", host: "Spain", flagA: "it", flagB: "de" },
+  { year: 1986, champion: "Argentina", runnerUp: "West Germany", score: "3–2", host: "Mexico", flagA: "ar", flagB: "de" },
+  { year: 1990, champion: "West Germany", runnerUp: "Argentina", score: "1–0", host: "Italy", flagA: "de", flagB: "ar" },
+  { year: 1994, champion: "Brazil", runnerUp: "Italy", score: "0–0 (3–2 pens)", host: "USA", flagA: "br", flagB: "it" },
+  { year: 1998, champion: "France", runnerUp: "Brazil", score: "3–0", host: "France", flagA: "fr", flagB: "br" },
+  { year: 2002, champion: "Brazil", runnerUp: "Germany", score: "2–0", host: "South Korea / Japan", flagA: "br", flagB: "de" },
+  { year: 2006, champion: "Italy", runnerUp: "France", score: "1–1 (5–3 pens)", host: "Germany", flagA: "it", flagB: "fr" },
+  { year: 2010, champion: "Spain", runnerUp: "Netherlands", score: "1–0", host: "South Africa", flagA: "es", flagB: "nl" },
+  { year: 2014, champion: "Germany", runnerUp: "Argentina", score: "1–0", host: "Brazil", flagA: "de", flagB: "ar" },
+  { year: 2018, champion: "France", runnerUp: "Croatia", score: "4–2", host: "Russia", flagA: "fr", flagB: "hr" },
+  { year: 2022, champion: "Argentina", runnerUp: "France", score: "3–3 (4–2 pens)", host: "Qatar", flagA: "ar", flagB: "fr" },
+];
+
 const elements = {
   leaderboard: document.getElementById("leaderboard"),
-  matchFeed: document.getElementById("matchFeed"),
+  heroTopGoals: document.getElementById("heroTopGoalTeamList"),
+  homeTopGoals: document.getElementById("topGoalTeamList"),
+  finishedResults: document.getElementById("finishedResults"),
+  upcomingFeed: document.getElementById("upcomingFeed"),
+  winnerCard: document.getElementById("winnerCard"),
   liveMatchCount: document.getElementById("liveMatchCount"),
   liveSourceStatus: document.getElementById("liveSourceStatus"),
   refreshButton: document.getElementById("refreshButton"),
   todayFixturesCount: document.getElementById("todayFixturesCount"),
-  topGoalTeamList: document.getElementById("topGoalTeamList"),
   matchSelect: document.getElementById("matchSelect"),
   scoreA: document.getElementById("scoreA"),
   scoreB: document.getElementById("scoreB"),
@@ -181,7 +213,173 @@ async function fetchJson(url) {
   return response.json();
 }
 
-function formatApiDate(rawDate) {
+async function fetchText(url) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch ${url}: ${response.status} ${response.statusText}`);
+  }
+  return response.text();
+}
+
+function parseCsv(csvText) {
+  const rows = [];
+  let current = "";
+  let inQuotes = false;
+  let row = [];
+
+  const pushCell = () => {
+    row.push(current);
+    current = "";
+  };
+
+  for (let i = 0; i < csvText.length; i += 1) {
+    const char = csvText[i];
+    const next = csvText[i + 1];
+
+    if (inQuotes) {
+      if (char === '"') {
+        if (next === '"') {
+          current += '"';
+          i += 1;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        current += char;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inQuotes = true;
+      continue;
+    }
+
+    if (char === ",") {
+      pushCell();
+      continue;
+    }
+
+    if (char === "\n" || char === "\r") {
+      if (current !== "" || row.length) {
+        pushCell();
+        rows.push(row);
+        row = [];
+      }
+      if (char === "\r" && next === "\n") i += 1;
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (current !== "" || row.length) {
+    pushCell();
+    rows.push(row);
+  }
+
+  const headers = rows.shift() || [];
+  return rows.map((cells) => {
+    const entry = {};
+    headers.forEach((header, index) => {
+      entry[header.trim()] = cells[index] ? cells[index].trim() : "";
+    });
+    return entry;
+  });
+}
+
+async function loadKaggleDataset() {
+  try {
+    const [teamsText, matchesText] = await Promise.all([
+      fetchText(KAGGLE_TEAMS_PATH),
+      fetchText(KAGGLE_MATCHES_PATH),
+    ]);
+
+    const teamRows = parseCsv(teamsText);
+    const matchRows = parseCsv(matchesText);
+
+    buildKaggleTeamMap(teamRows);
+    kaggleMatches = matchRows
+      .map((row) => normalizeKaggleMatch(row))
+      .filter((match) => match.teamA && match.teamB && match.rawDate);
+
+    if (kaggleMatches.length) {
+      isKaggleDatasetLoaded = true;
+      renderLiveSourceStatus(`Local Kaggle dataset loaded (${kaggleMatches.length} matches)`);
+      return true;
+    }
+  } catch (error) {
+    console.warn("Kaggle dataset load failed:", error);
+  }
+
+  return false;
+}
+
+function buildKaggleTeamMap(teamRows) {
+  teamRows.forEach((team) => {
+    const id = String(team.id || team.team_id || team.teamId || "").trim();
+    const name = String(team.name || team.name_en || team.team_name || team.teamName || "").trim();
+    const code = String(team.fifa_code || team.fifaCode || team.code || team.iso2 || id || name).trim();
+    const iso2 = String(team.iso2 || team.country_code || team.countryCode || "").trim();
+    const flag = String(team.flag || team.flag_url || team.flagUrl || "").trim() || (iso2 ? `https://flagcdn.com/w40/${iso2.toLowerCase()}.png` : "");
+    const meta = { id, name, code, iso2, flag };
+
+    if (code) {
+      apiTeamMetaByCode[code] = meta;
+      apiTeamMetaByCode[code.toLowerCase()] = meta;
+      apiTeamMetaByCode[code.toUpperCase()] = meta;
+    }
+    if (name) {
+      apiTeamCodeByName[name.toLowerCase()] = code;
+      apiTeamMetaByCode[name.toLowerCase()] = meta;
+    }
+    if (id) {
+      apiTeamCodeById[id] = code;
+      apiTeamMetaByCode[id] = meta;
+      apiTeamMetaByCode[id.toLowerCase()] = meta;
+      apiTeamMetaByCode[id.toUpperCase()] = meta;
+    }
+  });
+}
+
+function normalizeKaggleMatch(rawMatch) {
+  const homeName = String(rawMatch.home_team_name || rawMatch.home_team || rawMatch.home_name || rawMatch.home_team_name_en || rawMatch.homeTeamName || "").trim();
+  const awayName = String(rawMatch.away_team_name || rawMatch.away_team || rawMatch.away_name || rawMatch.away_team_name_en || rawMatch.awayTeamName || "").trim();
+  const homeCode = String(rawMatch.home_team_code || rawMatch.home_code || rawMatch.home_fifa_code || rawMatch.home_team_id || rawMatch.home_team || homeName).trim();
+  const awayCode = String(rawMatch.away_team_code || rawMatch.away_code || rawMatch.away_fifa_code || rawMatch.away_team_id || rawMatch.away_team || awayName).trim();
+
+  const rawDate = rawMatch.kickoff_at || rawMatch.kickoff_at_utc || rawMatch.kickoff_at_local || rawMatch.match_date || rawMatch.date || rawMatch.start_date || rawMatch.startDate || rawMatch.kickoff || "";
+  const parsedDate = parseApiDate(rawDate);
+  const scoreA = Number(rawMatch.home_score ?? rawMatch.homeScore ?? rawMatch.homeGoals ?? rawMatch.home || 0);
+  const scoreB = Number(rawMatch.away_score ?? rawMatch.awayScore ?? rawMatch.awayGoals ?? rawMatch.away || 0);
+  const now = new Date();
+  const isFuture = parsedDate ? parsedDate.getTime() > now.getTime() : false;
+  const hasScore = Number.isFinite(scoreA) && Number.isFinite(scoreB) && (scoreA !== 0 || scoreB !== 0);
+  const status = hasScore || !isFuture ? "finished" : "upcoming";
+  const statusLabel = status === "finished" ? "Finished" : "Upcoming";
+  const stageText = String(rawMatch.stage_name || rawMatch.stage || rawMatch.tournament_stage || rawMatch.stageName || "").trim();
+  const venueText = String(rawMatch.venue_name || rawMatch.venue || rawMatch.stadium_name || rawMatch.city || "").trim();
+  const descriptionParts = [];
+  if (stageText) descriptionParts.push(stageText);
+  if (venueText) descriptionParts.push(venueText);
+
+  return {
+    id: `KAGGLE-${String(rawMatch.match_number || rawMatch.id || rawMatch.match_id || rawMatch._id || "").trim()}`,
+    teamA: resolveTeamCode(homeCode),
+    teamB: resolveTeamCode(awayCode),
+    teamAName: homeName,
+    teamBName: awayName,
+    scoreA,
+    scoreB,
+    status,
+    statusLabel,
+    description: descriptionParts.join(" • ") || "World Cup fixture",
+    summary: buildMatchSummary(rawMatch, homeName, awayName, scoreA, scoreB, statusLabel),
+    dateLabel: formatApiDate(rawDate),
+    rawDate,
+    rawStatus: rawMatch.status || rawMatch.time_elapsed || "",
+  };
+}
   if (!rawDate) return "";
   const date = parseApiDate(rawDate);
   if (!date) return "Date TBD";
@@ -312,7 +510,13 @@ function renderTopGoalTeams(teams) {
 function updateHeroStats(matches) {
   const topGoals = getTopGoalTeams(matches);
   elements.todayFixturesCount.textContent = `${countTodayFixtures(matches)} today`;
-  elements.topGoalTeamList.innerHTML = renderTopGoalTeams(topGoals);
+  const topGoalsHtml = renderTopGoalTeams(topGoals);
+  if (elements.topGoalTeamList) {
+    elements.topGoalTeamList.innerHTML = topGoalsHtml;
+  }
+  if (elements.heroTopGoals) {
+    elements.heroTopGoals.innerHTML = topGoalsHtml;
+  }
   return topGoals[0]?.code || null;
 }
 
@@ -426,6 +630,13 @@ function renderLiveSourceStatus(message, isError = false) {
 }
 
 async function loadLiveScoreboard() {
+  if (isKaggleDatasetLoaded) {
+    renderMatches();
+    renderLeaderboard();
+    populateMatchSelect();
+    return;
+  }
+
   renderLiveSourceStatus("Refreshing live scoreboard...");
   let apiMatches = [];
   let liveError = null;
@@ -463,6 +674,9 @@ async function loadLiveScoreboard() {
 }
 
 function getActiveMatches() {
+  if (isKaggleDatasetLoaded && kaggleMatches.length) {
+    return kaggleMatches;
+  }
   return externalMatches.length ? externalMatches : matches;
 }
 
@@ -636,19 +850,16 @@ function renderMatches() {
   elements.liveMatchCount.textContent = `${ongoingCount} ongoing match${ongoingCount === 1 ? "" : "es"}`;
   updateHeroStats(activeMatches);
 
-  const liveMatches = activeMatches.filter((match) => match.status === "ongoing");
-  const todayMatches = activeMatches.filter((match) => match.status === "upcoming" && isToday(match.rawDate));
-  const upcomingMatches = activeMatches.filter((match) => match.status === "upcoming" && !isToday(match.rawDate));
-  const recentMatches = activeMatches.filter((match) => match.status === "finished");
+  const finishedMatches = activeMatches.filter((match) => match.status === "finished");
+  const upcomingMatches = activeMatches.filter((match) => match.status === "upcoming");
 
-  elements.matchFeed.innerHTML = [
-    renderMatchGroup("Live matches", liveMatches, "No live matches right now.", "live"),
-    renderMatchGroup("Today’s fixtures", todayMatches, "No fixtures scheduled for today.", "today"),
-    renderMatchGroup("Upcoming fixtures", upcomingMatches, "No more upcoming games.", "upcoming", true),
-    renderMatchGroup("Recent results", recentMatches, "No completed matches yet.", "recent"),
-  ].join("\n");
+  elements.finishedResults.innerHTML = finishedMatches.length
+    ? finishedMatches.map(renderMatchCard).join("\n")
+    : `<p class="empty-group">No finished matches yet.</p>`;
 
-  attachGroupToggles();
+  elements.upcomingFeed.innerHTML = upcomingMatches.length
+    ? upcomingMatches.map(renderMatchCard).join("\n")
+    : `<p class="empty-group">No upcoming fixtures available.</p>`;
 }
 
 function populateMatchSelect() {
@@ -708,11 +919,70 @@ elements.refreshButton.addEventListener("click", () => {
   loadLiveScoreboard();
 });
 
-function init() {
+function switchTab(tabId) {
+  document.querySelectorAll(".tab-panel").forEach((panel) => {
+    panel.classList.toggle("active", panel.id === `${tabId}Tab`);
+  });
+  document.querySelectorAll(".tab-button").forEach((button) => {
+    button.classList.toggle("active", button.getAttribute("data-tab") === tabId);
+  });
+}
+
+function renderPastWinner() {
+  elements.winnerCard.innerHTML = `
+    <div class="winner-summary">
+      <p>${worldCupWinners.length} World Cup winners since 1930</p>
+      <div class="winner-list">
+        ${worldCupWinners
+          .map(
+            (winner) => `
+          <div class="winner-row">
+            <div class="winner-row-left">
+              <span class="winner-year">${winner.year}</span>
+              <div class="winner-team-row">
+                <img src="https://flagcdn.com/w30/${winner.flagA}.png" alt="${winner.champion} flag" loading="lazy" />
+                <span>${winner.champion}</span>
+              </div>
+            </div>
+            <div class="winner-score-row">${winner.score}</div>
+            <div class="winner-row-right">
+              <div class="winner-team-row">
+                <img src="https://flagcdn.com/w30/${winner.flagB}.png" alt="${winner.runnerUp} flag" loading="lazy" />
+                <span>${winner.runnerUp}</span>
+              </div>
+              <span class="winner-host">Host: ${winner.host}</span>
+            </div>
+          </div>
+        `,
+          )
+          .join("")}
+      </div>
+    </div>
+  `;
+}
+
+function attachTabListeners() {
+  document.querySelectorAll(".tab-button").forEach((button) => {
+    button.addEventListener("click", () => {
+      switchTab(button.getAttribute("data-tab"));
+    });
+  });
+}
+
+async function init() {
   renderLeaderboard();
   renderMatches();
   populateMatchSelect();
-  loadLiveScoreboard();
+  renderPastWinner();
+  attachTabListeners();
+  const datasetLoaded = await loadKaggleDataset();
+  if (!datasetLoaded) {
+    await loadLiveScoreboard();
+  } else {
+    renderLeaderboard();
+    renderMatches();
+    populateMatchSelect();
+  }
 }
 
 init();
