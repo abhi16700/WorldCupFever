@@ -105,6 +105,7 @@ const matches = [
 ];
 
 const LIVE_API_BASE = "https://worldcupjson.net";
+const CORS_PROXY = "https://api.allorigins.win/raw?url=";
 let externalMatches = [];
 
 const weights = {
@@ -171,28 +172,48 @@ function renderLiveSourceStatus(message, isError = false) {
 }
 
 async function loadLiveScoreboard() {
+  renderLiveSourceStatus("Refreshing live scoreboard...");
+  let apiMatches = [];
+  let currentMatches = [];
+  let todayMatches = [];
+  let currentError = null;
+  let todayError = null;
+
   try {
-    renderLiveSourceStatus("Refreshing live scoreboard...");
-    let apiMatches = await fetchJson(`${LIVE_API_BASE}/matches/current`);
-    if (!Array.isArray(apiMatches) || apiMatches.length === 0) {
-      apiMatches = await fetchJson(`${LIVE_API_BASE}/matches/today`);
-    }
-
-    externalMatches = Array.isArray(apiMatches)
-      ? apiMatches.map(normalizeApiMatch)
-      : [];
-
-    if (externalMatches.length) {
-      renderLiveSourceStatus(`Live FIFA feed loaded (${externalMatches.length} match${
-        externalMatches.length === 1 ? "" : "es"
-      })`);
-    } else {
-      renderLiveSourceStatus("No live FIFA matches found; showing simulated data.");
+    currentMatches = await fetchJson(`${CORS_PROXY}${encodeURIComponent(`${LIVE_API_BASE}/matches/current`)}`);
+    if (!Array.isArray(currentMatches)) {
+      currentMatches = [];
     }
   } catch (error) {
-    console.error("Live scoreboard fetch failed:", error);
+    currentError = error;
+    console.warn("Failed to fetch current matches:", error);
+    currentMatches = [];
+  }
+
+  if (currentMatches.length === 0) {
+    try {
+      todayMatches = await fetchJson(`${CORS_PROXY}${encodeURIComponent(`${LIVE_API_BASE}/matches/today`)}`);
+      if (!Array.isArray(todayMatches)) {
+        todayMatches = [];
+      }
+    } catch (error) {
+      todayError = error;
+      console.warn("Failed to fetch today matches:", error);
+      todayMatches = [];
+    }
+  }
+
+  apiMatches = currentMatches.length ? currentMatches : todayMatches;
+  externalMatches = apiMatches.map(normalizeApiMatch);
+
+  if (externalMatches.length) {
+    renderLiveSourceStatus(`Live FIFA feed loaded (${externalMatches.length} match${
+      externalMatches.length === 1 ? "" : "es"
+    })`);
+  } else if (currentError || todayError) {
     renderLiveSourceStatus("Unable to load live scoreboard; using static data.", true);
-    externalMatches = [];
+  } else {
+    renderLiveSourceStatus("No live FIFA matches found; showing simulated data.");
   }
 
   renderMatches();
