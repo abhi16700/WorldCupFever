@@ -10,13 +10,26 @@
   <div class="app-shell">
     <header class="hero">
       <div>
-        <p class="eyebrow">World Cup Fever</p>
+        <div class="hero-brand">
+          <img
+            src="https://upload.wikimedia.org/wikipedia/commons/thumb/e/ef/2026_FIFA_World_Cup_ensign_(PD_version).png/240px-2026_FIFA_World_Cup_ensign_(PD_version).png"
+            alt="FIFA World Cup 2026 logo"
+            width="72"
+            height="72"
+            loading="lazy"
+          />
+          <p class="eyebrow">World Cup Fever</p>
+        </div>
         <h1>Track the most likely World Cup winner</h1>
         <p class="subtitle">
-          Powered by Klement’s model: GDP per capita, population, football
-          culture, ranking, and live match performance.
+          Powered by Klement’s world cup algorithm: GDP per capita, population,
+          football culture, world ranking, and real-time match performance.
         </p>
-        <p class="hero-note">Now with live fixture dates, country flags, and concise match summaries for every World Cup 2026 game.</p>
+        <p class="hero-note">
+          Live World Cup 2026 data now includes exact fixture dates, country flags,
+          match score summaries, and a smarter grouped view for live, upcoming,
+          and completed games.
+        </p>
       </div>
       <div class="hero-card">
         <p class="stat-label">Live FIFA 2026 scoreboard</p>
@@ -29,8 +42,10 @@
             <p class="stat-value" id="todayFixturesCount">0 today</p>
           </div>
           <div class="hero-stat">
-            <p class="stat-label">Most goals so far</p>
-            <p class="stat-value" id="topGoalTeam">N/A</p>
+            <p class="stat-label">Top 3 scoring teams</p>
+            <div id="topGoalTeamList" class="top-goal-list">
+              <p class="stat-value">N/A</p>
+            </div>
           </div>
         </div>
       </div>
