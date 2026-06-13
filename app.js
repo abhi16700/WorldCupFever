@@ -104,9 +104,13 @@ const matches = [
   },
 ];
 
-const LIVE_API_BASE = "https://worldcupjson.net";
-const CORS_PROXY = "https://api.allorigins.win/raw?url=";
+const LIVE_API_BASE = "https://worldcup26.ir";
+const LIVE_API_GAMES_PATH = "/get/games";
+const LIVE_API_TEAMS_PATH = "/get/teams";
 let externalMatches = [];
+let apiTeamCodeByName = {};
+let apiTeamNameByCode = {};
+let apiTeamCodeById = {};
 
 const weights = {
   gdp: 0.2,
@@ -141,28 +145,64 @@ async function fetchJson(url) {
   return response.json();
 }
 
+function loadLiveTeamMap() {
+  apiTeamCodeByName = {};
+  apiTeamNameByCode = {};
+  apiTeamCodeById = {};
+
+  return fetchJson(`${LIVE_API_BASE}${LIVE_API_TEAMS_PATH}`)
+    .then((data) => {
+      if (!data || !Array.isArray(data.teams)) return;
+      data.teams.forEach((team) => {
+        const id = String(team.id || team._id || "").trim();
+        const name = String(team.name_en || team.name || "").trim();
+        const code = String(team.fifa_code || team.code || team.iso2 || "").trim();
+
+        if (id) {
+          apiTeamCodeById[id] = code || name;
+        }
+        if (name) {
+          apiTeamCodeByName[name.toLowerCase()] = code || name;
+        }
+        if (code) {
+          apiTeamNameByCode[code] = name;
+        }
+      });
+    })
+    .catch((error) => {
+      console.warn("Failed to load live team mapping:", error);
+    });
+}
+
 function normalizeApiMatch(rawMatch) {
-  const teamA = rawMatch.home_team_country || rawMatch.home_team?.country;
-  const teamB = rawMatch.away_team_country || rawMatch.away_team?.country;
-  const status = String(rawMatch.status || "").toLowerCase();
+  const homeName = String(rawMatch.home_team_name_en || rawMatch.home_team_name_fa || rawMatch.home_team || "").trim();
+  const awayName = String(rawMatch.away_team_name_en || rawMatch.away_team_name_fa || rawMatch.away_team || "").trim();
+  const teamA = apiTeamCodeById[rawMatch.home_team_id] || apiTeamCodeByName[homeName.toLowerCase()] || rawMatch.home_team_id || homeName;
+  const teamB = apiTeamCodeById[rawMatch.away_team_id] || apiTeamCodeByName[awayName.toLowerCase()] || rawMatch.away_team_id || awayName;
+  const rawStatus = String(rawMatch.time_elapsed || rawMatch.finished || rawMatch.status || "").toLowerCase();
+  const finishedFlag = String(rawMatch.finished || "").toLowerCase();
   const mappedStatus =
-    status === "completed" || status === "complete"
+    finishedFlag === "true" || rawStatus.includes("finished") || rawStatus === "ft"
       ? "finished"
-      : status.includes("in progress") || status === "live" || status === "live now"
+      : rawStatus.includes("live") || rawStatus.includes("halftime") || rawStatus.includes("1st") || rawStatus.includes("2nd") || rawStatus.includes("in progress")
       ? "ongoing"
-      : status === "future" || status === "scheduled" || status === "upcoming"
-      ? "upcoming"
-      : "ongoing";
+      : "upcoming";
+
+  const descriptionParts = [];
+  if (rawMatch.group) descriptionParts.push(`Group ${rawMatch.group}`);
+  if (rawMatch.matchday) descriptionParts.push(`Matchday ${rawMatch.matchday}`);
 
   return {
-    id: `API-${rawMatch.id}`,
+    id: `API-${rawMatch.id || rawMatch._id}`,
     teamA,
     teamB,
-    scoreA: Number(rawMatch.home_team?.goals ?? rawMatch.home_team_score ?? 0),
-    scoreB: Number(rawMatch.away_team?.goals ?? rawMatch.away_team_score ?? 0),
+    teamAName: homeName,
+    teamBName: awayName,
+    scoreA: Number(rawMatch.home_score ?? rawMatch.homeScore ?? rawMatch.home ?? 0),
+    scoreB: Number(rawMatch.away_score ?? rawMatch.awayScore ?? rawMatch.away ?? 0),
     status: mappedStatus,
-    description: `${rawMatch.stage_name || rawMatch.venue || "FIFA match"}`,
-    rawStatus: rawMatch.status,
+    description: descriptionParts.join(" • ") || rawMatch.type || "FIFA match",
+    rawStatus: rawMatch.time_elapsed,
   };
 }
 
@@ -174,43 +214,30 @@ function renderLiveSourceStatus(message, isError = false) {
 async function loadLiveScoreboard() {
   renderLiveSourceStatus("Refreshing live scoreboard...");
   let apiMatches = [];
-  let currentMatches = [];
-  let todayMatches = [];
-  let currentError = null;
-  let todayError = null;
+  let liveError = null;
 
   try {
-    currentMatches = await fetchJson(`${CORS_PROXY}${encodeURIComponent(`${LIVE_API_BASE}/matches/current`)}`);
-    if (!Array.isArray(currentMatches)) {
-      currentMatches = [];
+    await loadLiveTeamMap();
+    const response = await fetchJson(`${LIVE_API_BASE}${LIVE_API_GAMES_PATH}`);
+    const rawGames = response?.games ?? [];
+    if (!Array.isArray(rawGames)) {
+      throw new Error("Unexpected live API response format");
     }
+    apiMatches = rawGames.map(normalizeApiMatch);
   } catch (error) {
-    currentError = error;
-    console.warn("Failed to fetch current matches:", error);
-    currentMatches = [];
+    liveError = error;
+    console.warn("Live scoreboard fetch failed:", error);
+    apiMatches = [];
   }
 
-  if (currentMatches.length === 0) {
-    try {
-      todayMatches = await fetchJson(`${CORS_PROXY}${encodeURIComponent(`${LIVE_API_BASE}/matches/today`)}`);
-      if (!Array.isArray(todayMatches)) {
-        todayMatches = [];
-      }
-    } catch (error) {
-      todayError = error;
-      console.warn("Failed to fetch today matches:", error);
-      todayMatches = [];
-    }
-  }
-
-  apiMatches = currentMatches.length ? currentMatches : todayMatches;
-  externalMatches = apiMatches.map(normalizeApiMatch);
+  externalMatches = apiMatches;
 
   if (externalMatches.length) {
+    const ongoingCount = externalMatches.filter((match) => match.status === "ongoing").length;
     renderLiveSourceStatus(`Live FIFA feed loaded (${externalMatches.length} match${
       externalMatches.length === 1 ? "" : "es"
-    })`);
-  } else if (currentError || todayError) {
+    }, ${ongoingCount} ongoing)`);
+  } else if (liveError) {
     renderLiveSourceStatus("Unable to load live scoreboard; using static data.", true);
   } else {
     renderLiveSourceStatus("No live FIFA matches found; showing simulated data.");
