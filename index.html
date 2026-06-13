@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>World Cup Fever</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">World Cup Fever</p>
+        <h1>Track the most likely World Cup winner</h1>
+        <p class="subtitle">
+          Powered by Klement’s model: GDP per capita, population, football
+          culture, ranking, and live match performance.
+        </p>
+      </div>
+      <div class="hero-card">
+        <p class="stat-label">Live FIFA 2026 scoreboard</p>
+        <p class="stat-value" id="liveMatchCount">0 ongoing matches</p>
+        <p class="stat-note" id="liveSourceStatus">Loading scoreboard from worldcupjson.net</p>
+        <button id="refreshButton" type="button" class="refresh-button">Refresh now</button>
+      </div>
+    </header>
+
+    <main>
+      <section class="panel">
+        <div class="panel-header">
+          <h2>Prediction leaderboard</h2>
+          <p>These rankings update instantly as match data changes.</p>
+        </div>
+        <div id="leaderboard" class="leaderboard"></div>
+      </section>
+
+      <section class="panel split-grid">
+        <div>
+          <h2>Ongoing & recent matches</h2>
+          <p>Follow currently active games, recent results, and live FIFA score updates.</p>
+          <div id="matchFeed" class="match-feed"></div>
+        </div>
+
+        <div>
+          <h2>Update a match</h2>
+          <p>Simulate a live score update to see the forecast update in real time.</p>
+          <form id="updateForm" class="update-form">
+            <label>
+              Match
+              <select id="matchSelect"></select>
+            </label>
+            <div class="score-grid">
+              <label>
+                Score A
+                <input id="scoreA" type="number" min="0" value="0" />
+              </label>
+              <label>
+                Score B
+                <input id="scoreB" type="number" min="0" value="0" />
+              </label>
+            </div>
+            <label>
+              Status
+              <select id="statusSelect">
+                <option value="ongoing">Ongoing</option>
+                <option value="finished">Finished</option>
+              </select>
+            </label>
+            <button type="submit">Apply update</button>
+          </form>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
