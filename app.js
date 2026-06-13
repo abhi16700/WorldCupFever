@@ -111,6 +111,7 @@ let externalMatches = [];
 let apiTeamCodeByName = {};
 let apiTeamNameByCode = {};
 let apiTeamCodeById = {};
+let apiTeamMetaByCode = {};
 
 const weights = {
   gdp: 0.2,
@@ -126,6 +127,8 @@ const elements = {
   liveMatchCount: document.getElementById("liveMatchCount"),
   liveSourceStatus: document.getElementById("liveSourceStatus"),
   refreshButton: document.getElementById("refreshButton"),
+  todayFixturesCount: document.getElementById("todayFixturesCount"),
+  topGoalTeam: document.getElementById("topGoalTeam"),
   matchSelect: document.getElementById("matchSelect"),
   scoreA: document.getElementById("scoreA"),
   scoreB: document.getElementById("scoreB"),
@@ -145,10 +148,87 @@ async function fetchJson(url) {
   return response.json();
 }
 
+function formatApiDate(rawDate) {
+  if (!rawDate) return "";
+  const [datePart, timePart] = rawDate.split(" ");
+  const [day, month, year] = (datePart || "").split("/");
+  const [hour, minute] = (timePart || "").split(":");
+  if (!day || !month || !year || !hour || !minute) return rawDate;
+
+  const date = new Date(`${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}T${hour.padStart(2, "0")}:${minute.padStart(2, "0")}:00`);
+  return `${date.toLocaleDateString(undefined, { month: "short", day: "numeric" })} · ${date.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" })}`;
+}
+
+function parseApiDate(rawDate) {
+  if (!rawDate) return null;
+  const [datePart, timePart] = rawDate.split(" ");
+  const [day, month, year] = (datePart || "").split("/");
+  const [hour, minute] = (timePart || "").split(":");
+  if (!day || !month || !year || !hour || !minute) return null;
+  return new Date(`${year}-${month.padStart(2, "0")}-${day.padStart(2, "0")}T${hour.padStart(2, "0")}:${minute.padStart(2, "0")}:00`);
+}
+
+function isToday(rawDate) {
+  const date = parseApiDate(rawDate);
+  if (!date) return false;
+  const now = new Date();
+  return (
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate()
+  );
+}
+
+function buildMatchSummary(rawMatch, homeName, awayName, scoreA, scoreB, statusLabel) {
+  const group = rawMatch.group ? `Group ${rawMatch.group}` : "World Cup fixture";
+  if (statusLabel === "Finished") {
+    const result = scoreA > scoreB ? `${homeName} edged past ${awayName}` : scoreA < scoreB ? `${awayName} upset ${homeName}` : `${homeName} and ${awayName} played out a draw`;
+    return `${result} in ${group}.`;
+  }
+  if (statusLabel === "Ongoing") {
+    return `Live now: ${homeName} vs ${awayName} — follow the action from ${group}.`;
+  }
+  return `${homeName} and ${awayName} face off in ${group}.`;
+}
+
+function countTodayFixtures(matches) {
+  return matches.filter((match) => isToday(match.rawDate)).length;
+}
+
+function getTopGoalTeam(matches) {
+  const goals = {};
+  matches.forEach((match) => {
+    const teamA = match.teamA;
+    const teamB = match.teamB;
+    if (!goals[teamA]) goals[teamA] = 0;
+    if (!goals[teamB]) goals[teamB] = 0;
+    goals[teamA] += Number(match.scoreA || 0);
+    goals[teamB] += Number(match.scoreB || 0);
+  });
+
+  const sorted = Object.entries(goals).sort(([, a], [, b]) => b - a);
+  if (!sorted.length) return { code: null, label: "N/A" };
+  const [topTeam, topGoals] = sorted[0];
+  const teamMeta = getTeamMetaByCode(topTeam);
+  return { code: topTeam, label: `${teamMeta.name || topTeam} (${topGoals} goals)` };
+}
+
+function updateHeroStats(matches) {
+  const topGoalTeam = getTopGoalTeam(matches);
+  elements.todayFixturesCount.textContent = `${countTodayFixtures(matches)} today`;
+  elements.topGoalTeam.textContent = topGoalTeam.label;
+  return topGoalTeam.code;
+}
+
+function getTeamMetaByCode(code) {
+  return apiTeamMetaByCode[code] || { code, name: code, iso2: "", flag: "" };
+}
+
 function loadLiveTeamMap() {
   apiTeamCodeByName = {};
   apiTeamNameByCode = {};
   apiTeamCodeById = {};
+  apiTeamMetaByCode = {};
 
   return fetchJson(`${LIVE_API_BASE}${LIVE_API_TEAMS_PATH}`)
     .then((data) => {
@@ -157,8 +237,11 @@ function loadLiveTeamMap() {
         const id = String(team.id || team._id || "").trim();
         const name = String(team.name_en || team.name || "").trim();
         const code = String(team.fifa_code || team.code || team.iso2 || "").trim();
+        const iso2 = String(team.iso2 || "").trim();
+        const flag = iso2 ? `https://flagcdn.com/w40/${iso2.toLowerCase()}.png` : "";
+        const meta = { id, name, code: code || name, iso2, flag };
 
-        if (id) {
+              if (id) {
           apiTeamCodeById[id] = code || name;
         }
         if (name) {
@@ -166,6 +249,10 @@ function loadLiveTeamMap() {
         }
         if (code) {
           apiTeamNameByCode[code] = name;
+          apiTeamMetaByCode[code] = meta;
+        }
+        if (name && !apiTeamMetaByCode[name]) {
+          apiTeamMetaByCode[name] = meta;
         }
       });
     })
@@ -201,7 +288,11 @@ function normalizeApiMatch(rawMatch) {
     scoreA: Number(rawMatch.home_score ?? rawMatch.homeScore ?? rawMatch.home ?? 0),
     scoreB: Number(rawMatch.away_score ?? rawMatch.awayScore ?? rawMatch.away ?? 0),
     status: mappedStatus,
+    statusLabel: mappedStatus === "finished" ? "Finished" : mappedStatus === "ongoing" ? "Ongoing" : "Upcoming",
     description: descriptionParts.join(" • ") || rawMatch.type || "FIFA match",
+    summary: buildMatchSummary(rawMatch, homeName, awayName, Number(rawMatch.home_score ?? rawMatch.homeScore ?? rawMatch.home ?? 0), Number(rawMatch.away_score ?? rawMatch.awayScore ?? rawMatch.away ?? 0), mappedStatus === "finished" ? "Finished" : mappedStatus === "ongoing" ? "Ongoing" : "Upcoming"),
+    dateLabel: formatApiDate(rawMatch.local_date || rawMatch.date || rawMatch.localDate),
+    rawDate: rawMatch.local_date || rawMatch.date || rawMatch.localDate,
     rawStatus: rawMatch.time_elapsed,
   };
 }
@@ -324,14 +415,23 @@ function getPredictionData() {
 
 function renderLeaderboard() {
   const prediction = getPredictionData();
+  const topGoalTeamCode = getTopGoalTeam(getActiveMatches()).code;
   elements.leaderboard.innerHTML = prediction
-    .map(
-      (team, index) => `
-      <div class="team-card">
-        <h3>
-          <span>${index + 1}. ${team.name}</span>
-          <span>${team.probability}%</span>
-        </h3>
+    .map((team, index) => {
+      const teamMeta = getTeamMetaByCode(team.id);
+      const isTopScorer = topGoalTeamCode && team.id === topGoalTeamCode;
+      return `
+      <div class="team-card ${isTopScorer ? "top-scorer-card" : ""}">
+        <div class="team-card-header">
+          <div class="leaderboard-team">
+            ${teamMeta.flag ? `<img src="${teamMeta.flag}" alt="${team.name} flag" loading="lazy" />` : ""}
+            <span>${index + 1}. ${team.name}</span>
+          </div>
+          <div class="leaderboard-pill-group">
+            ${isTopScorer ? `<span class="top-scorer-badge">Top scorer</span>` : ""}
+            <span class="probability-pill">${team.probability}%</span>
+          </div>
+        </div>
         <p>World ranking: ${team.worldRanking}</p>
         <p>Football culture: ${team.footballCulture}/10</p>
         <p>Live performance multiplier: ${team.performance.toFixed(2)}</p>
@@ -339,8 +439,8 @@ function renderLeaderboard() {
           <span style="width:${team.probability}%;"></span>
         </div>
       </div>
-    `
-    )
+    `;
+    })
     .join("\n");
 }
 
@@ -348,18 +448,36 @@ function renderMatches() {
   const activeMatches = getActiveMatches();
   const ongoingCount = activeMatches.filter((match) => match.status === "ongoing").length;
   elements.liveMatchCount.textContent = `${ongoingCount} ongoing match${ongoingCount === 1 ? "" : "es"}`;
+  const topGoalTeamCode = updateHeroStats(activeMatches);
 
   elements.matchFeed.innerHTML = activeMatches
     .map((match) => {
       const teamA = getTeamById(match.teamA);
       const teamB = getTeamById(match.teamB);
-      const teamAName = teamA ? teamA.name : match.teamA;
-      const teamBName = teamB ? teamB.name : match.teamB;
+      const teamAName = teamA ? teamA.name : match.teamAName || match.teamA;
+      const teamBName = teamB ? teamB.name : match.teamBName || match.teamB;
+      const teamAMeta = getTeamMetaByCode(match.teamA);
+      const teamBMeta = getTeamMetaByCode(match.teamB);
+      const statusClass = match.status === "ongoing" ? "status-ongoing" : match.status === "finished" ? "status-finished" : "status-upcoming";
+
       return `
       <div class="match-card">
-        <strong>${teamAName} ${match.scoreA} — ${match.scoreB} ${teamBName}</strong>
-        <p>${match.description}</p>
-        <p>Status: ${match.status}</p>
+        <div class="match-header">
+          <div class="match-teams">
+            <div class="team-pill">
+              ${teamAMeta.flag ? `<img src="${teamAMeta.flag}" alt="${teamAName} flag" loading="lazy" />` : ""}
+              <span>${teamAName}</span>
+            </div>
+            <div class="match-score">${match.scoreA} — ${match.scoreB}</div>
+            <div class="team-pill">
+              ${teamBMeta.flag ? `<img src="${teamBMeta.flag}" alt="${teamBName} flag" loading="lazy" />` : ""}
+              <span>${teamBName}</span>
+            </div>
+          </div>
+          <span class="status-badge ${statusClass}">${match.statusLabel}</span>
+        </div>
+        <p class="match-meta">${match.description} · ${match.dateLabel}</p>
+        <p class="match-summary">${match.summary}</p>
       </div>
     `;
     })
@@ -372,9 +490,9 @@ function populateMatchSelect() {
     .map((match, index) => {
       const teamA = getTeamById(match.teamA);
       const teamB = getTeamById(match.teamB);
-      const teamAName = teamA ? teamA.name : match.teamA;
-      const teamBName = teamB ? teamB.name : match.teamB;
-      return `<option value="${index}">${teamAName} vs ${teamBName} — ${match.status}</option>`;
+      const teamAName = teamA ? teamA.name : match.teamAName || match.teamA;
+      const teamBName = teamB ? teamB.name : match.teamBName || match.teamB;
+      return `<option value="${index}">${teamAName} vs ${teamBName} — ${match.dateLabel}</option>`;
     })
     .join("");
 
